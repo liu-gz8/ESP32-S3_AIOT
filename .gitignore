@@ -1,0 +1,24 @@
+# ===== ESP-IDF 构建产物 =====
+build/
+build_*/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies/
+
+# ===== 编译中间文件 =====
+*.bin
+*.elf
+*.map
+*.o
+*.a
+
+# ===== 编辑器与IDE =====
+.vscode/
+.idea/
+*.swp
+*.DS_Store
+
+# ===== 日志与临时文件 =====
+*.log
+*.tmp
