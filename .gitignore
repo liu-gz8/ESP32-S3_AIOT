@@ -3,6 +3,7 @@ build/
 build_*/
 sdkconfig
 sdkconfig.old
+sdkconfig.*.old
 managed_components/
 dependencies/
 
@@ -22,3 +23,4 @@ dependencies/
 # ===== 日志与临时文件 =====
 *.log
 *.tmp
+.pio/

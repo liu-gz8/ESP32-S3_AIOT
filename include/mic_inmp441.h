@@ -19,6 +19,3 @@ void i2s_init_std_simplex(void);
 
 //i2s读取任务函数
 void i2s_read_task(void *arg);
-
-//i2s写入任务函数
-void i2s_write_task(void *arg);
