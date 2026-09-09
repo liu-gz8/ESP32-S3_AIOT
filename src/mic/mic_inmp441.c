@@ -20,14 +20,14 @@ void i2s_init_std_simplex(void)
 
     //I2S接收通道标准模式配置
     i2s_std_config_t rx_std_cfg = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(44100),//I2S接收通道标准模式配置，采样率为44.1kHz
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000),//I2S接收通道标准模式配置，采样率为16kHz
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),//I2S接收通道标准模式配置
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED, //MCLK未使用
-            .bclk = MIC_I2S_BCLK_STDIO2,  //BCLK引脚
-            .ws   = MIC_I2S_WS_STDIO2,  //WS引脚
-            .dout = MIC_I2S_DOUT_STDIO2,  //DOUT引脚
-            .din  = MIC_I2S_DIN_STDIO2,  //DIN引脚
+            .bclk = MIC_I2S_BCLK_STDIO1,  //BCLK引脚
+            .ws   = MIC_I2S_WS_STDIO1,  //WS引脚
+            .dout = MIC_I2S_DOUT_STDIO1,  //DOUT引脚
+            .din  = MIC_I2S_DIN_STDIO1,  //DIN引脚
             .invert_flags = {
                 .mclk_inv = false,//MCLK不反相
                 .bclk_inv = false,//BCLK不反相
@@ -42,7 +42,7 @@ void i2s_init_std_simplex(void)
 //I2S读取任务函数
 void i2s_read_task(void *arg)
 {
-    uint32_t *r_buf = (uint32_t *)calloc(1, BUFFER_SIZE); //分配缓冲区内存
+    int32_t *r_buf = (int32_t *)calloc(1, BUFFER_SIZE); //分配缓冲区内存
     assert(r_buf); //断言缓冲区内存分配成功
     size_t r_bytes = 0; //实际读取的字节数
 
