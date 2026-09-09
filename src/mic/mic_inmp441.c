@@ -1,3 +1,4 @@
+/*INMP441驱动*/
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -12,7 +13,9 @@
 
 static i2s_chan_handle_t i2s_rx_chan; //I2S接收通道句柄
 
-void i2s_init_std_simplex(void)
+
+//麦克风初始化函数
+esp_err_t mic_init(void)
 {
     //I2S接收通道配置
     i2s_chan_config_t rx_chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
@@ -20,7 +23,7 @@ void i2s_init_std_simplex(void)
 
     //I2S接收通道标准模式配置
     i2s_std_config_t rx_std_cfg = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000),//I2S接收通道标准模式配置，采样率为16kHz
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(MIC_SAMPLE_RATE_HZ),//I2S接收通道标准模式配置，采样率为16kHz
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),//I2S接收通道标准模式配置
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED, //MCLK未使用
@@ -37,33 +40,16 @@ void i2s_init_std_simplex(void)
     };
     rx_std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_BOTH; //设置I2S接收通道的槽掩码为同时接收左右声道数据
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(i2s_rx_chan, &rx_std_cfg)); //初始化I2S接收通道的标准模式
+
+    return i2s_channel_enable(i2s_rx_chan);
 }
 
 //I2S读取任务函数
-void i2s_read_task(void *arg)
+/*=================================================
+ *r_buf :数据接收缓冲区
+ *r_bytes :读取的字节数
+ ====================================================*/
+esp_err_t mic_read_frame(int32_t *r_buf, const size_t r_bytes)
 {
-    int32_t *r_buf = (int32_t *)calloc(1, BUFFER_SIZE); //分配缓冲区内存
-    assert(r_buf); //断言缓冲区内存分配成功
-    size_t r_bytes = 0; //实际读取的字节数
-
-    ESP_ERROR_CHECK(i2s_channel_enable(i2s_rx_chan)); //启用I2S接收通道
-
-    while(1)
-    {
-        if(i2s_channel_read(i2s_rx_chan, r_buf, BUFFER_SIZE, &r_bytes, portMAX_DELAY) == ESP_OK) //从I2S接收通道读取数据
-        {
-            //处理接收到的数据
-            printf("Received %d bytes of data\n", r_bytes); //打印接收到的数据字节数
-            printf("[0] %lx [1] %lx [2] %lx [3] %lx [4] %lx [5] %lx [6] %lx [7] %lx\n\n",
-                 r_buf[0] >> 8, r_buf[1] >> 8, r_buf[2] >> 8, r_buf[3] >> 8, r_buf[4] >> 8, r_buf[5] >> 8, r_buf[6] >> 8, r_buf[7] >> 8); //打印接收到的数据的前8个字节
-        }else
-        {
-            printf("Error reading data from I2S channel\n"); //打印读取数据错误信息
-        }
-        vTaskDelay(pdMS_TO_TICKS(200)); //延时200毫秒
-
-    }
-    free(r_buf); //释放缓冲区内存
-    vTaskDelete(NULL); //删除当前任务
+    return i2s_channel_read(i2s_rx_chan, r_buf, r_bytes, NULL, portMAX_DELAY);
 }
-
