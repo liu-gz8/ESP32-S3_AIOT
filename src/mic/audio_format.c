@@ -20,7 +20,7 @@ void audio_convert_to_s16(const int32_t *raw, size_t frames, int16_t *out)
     }
 }
 
-//RMS 统计函数
+//RMS 能量统计函数
 /*==============================================================
  *pcm : 16bit样本数据串
  *frames : 统计帧数
@@ -29,7 +29,7 @@ block_rms_t audio_rms(const int16_t *pcm, size_t frames)
 {
     block_rms_t st = {};
     st.frames = frames;
-    
+
     for(size_t i = 0; i < frames; i++)
     {
         int32_t l = pcm[2 * i];
