@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define VAD_THRESHOLD 8 //高于噪声底多少作为有效音频
 #define  VAD_ONSET_FRAME 3  //大于多少帧判定起始帧  3*16ms
@@ -24,7 +25,7 @@ typedef enum
     VAD_EVENT_NONE = 0,
     VAD_EVENT_START,
     VAD_EVENT_END
-}vad_enent_t;
+}vad_event_t;
 
 typedef struct
 {
@@ -48,5 +49,5 @@ void vad_init(vad_t* vad);
  *rms_l：左声道能量（db）
  *rms_r: 右声道能量（db）
  */
-vad_enent_t vad_process(vad_t* vad, float rms_l, float rms_r);
+vad_event_t vad_process(vad_t* vad, float rms_l, float rms_r);
 

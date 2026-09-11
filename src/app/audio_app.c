@@ -6,6 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "audio_segment.h"
 #include "audio_app.h"
 #include "audio_format.h"
 #include "mic_inmp441.h"
@@ -18,7 +19,7 @@ void audio_app_task(void *arg)
     
     int32_t *raw = (int32_t *)calloc(1, RX_BUFFER_BYTES);
     int16_t *pcm = (int16_t *)calloc(1, RX_PCM_BUFFER_BYTES);
-    vad_enent_t vad_event = 0;
+    vad_event_t vad_event = 0;
     block_rms_t st = {};
     //int printf_cnt = 0;
 
@@ -37,6 +38,7 @@ void audio_app_task(void *arg)
         audio_convert_to_s16(raw, RX_FRAME_COUNT, pcm);
         st = audio_rms(pcm, RX_FRAME_COUNT);
         vad_event = vad_process(vad, st.rms_l, st.rms_r);
+        audio_segment_feed(pcm, RX_FRAME_COUNT, vad_event);
         //6.25fps
         //if(++printf_cnt % 10 == 0)
         block_id++;
@@ -51,3 +53,24 @@ void audio_app_task(void *arg)
     vTaskDelete(NULL);
 }
 
+void seg_consumer_task(void *arg)
+{
+    audio_segment_desc_t d;
+    uint32_t overrun = 0, used = 0;
+
+    while (1) {
+        if (audio_segment_retrieve(&d, portMAX_DELAY) == ESP_OK) {
+            printf("seg=%lu samples=%u dur=%ums peakL=%d peakR=%d trunc=%d\n",
+                   (unsigned long)d.seq, (unsigned)d.sample_count,
+                   (unsigned)(d.sample_count * 1000 / 16000),
+                   (int)d.peak_l, (int)d.peak_r, (int)d.truncated);
+
+            audio_segment_release(&d);          /* ★ 必须归还,否则 3 段后池空 */
+
+            audio_segment_stats(&overrun, &used);
+            printf("stats: overrun=%lu pool_used=%lu\n",
+                   (unsigned long)overrun, (unsigned long)used);
+        }
+    }
+    vTaskDelete(NULL);
+}

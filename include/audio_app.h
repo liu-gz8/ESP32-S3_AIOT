@@ -8,3 +8,4 @@
 
 //打印解码后音频任务
 void audio_app_task(void *arg);
+void seg_consumer_task(void *arg);
