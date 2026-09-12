@@ -24,3 +24,7 @@ esp_err_t mic_init(void);
 
 //i2s读取函数
 esp_err_t mic_read_frame(int32_t *r_buf, const size_t r_bytes);
+
+/*句柄接口*/
+i2s_chan_handle_t mic_get_tx_chan(void);
+

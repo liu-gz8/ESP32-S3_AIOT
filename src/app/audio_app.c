@@ -11,6 +11,9 @@
 #include "audio_format.h"
 #include "mic_inmp441.h"
 #include "vad.h"
+#include "audio_out.h"
+
+static bool was_playing = false;
 
 //打印 解码 音频 统计
 void audio_app_task(void *arg)
@@ -27,7 +30,6 @@ void audio_app_task(void *arg)
     assert(vad);
     vad_init(vad);
 
-    
     while(1)
     {
         if(mic_read_frame(raw, RX_BUFFER_BYTES) != ESP_OK)
@@ -37,10 +39,28 @@ void audio_app_task(void *arg)
 
         audio_convert_to_s16(raw, RX_FRAME_COUNT, pcm);
         st = audio_rms(pcm, RX_FRAME_COUNT);
+
+        bool playing = audio_out_is_playing();
+        if(playing)
+        {
+            was_playing = true;
+            continue;
+        }
+        if(was_playing)  /*刚结束播放，复位vad*/
+        {
+            was_playing = false;
+            vTaskDelay(pdMS_TO_TICKS(80));
+            vad_init(vad);
+            continue;
+        }
+
         vad_event = vad_process(vad, st.rms_l, st.rms_r);
+        
         audio_segment_feed(pcm, RX_FRAME_COUNT, vad_event);
         //6.25fps
         //if(++printf_cnt % 10 == 0)
+        //audio_out_play(pcm, RX_FRAME_COUNT);
+
         block_id++;
         printf("blk=%lu state=%d db=%.1f floor=%.1f event=%d frame=%ld\n",
             (unsigned long)block_id, vad->state, vad->voice_db,
