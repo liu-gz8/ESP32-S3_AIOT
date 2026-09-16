@@ -1,0 +1,6 @@
+## 应用组件依赖清单(ESP-IDF Component Manager)
+## 依赖会下载到 <项目>/managed_components/(已在 .gitignore 中)
+## 版本锁定记录在 <项目>/dependencies.lock(建议提交)
+dependencies:
+  espressif/esp-sr:
+    version: "^2.5.3"

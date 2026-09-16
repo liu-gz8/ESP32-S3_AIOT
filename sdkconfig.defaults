@@ -1,0 +1,14 @@
+## ESP-SR 语音识别配置(与 sdkconfig.esp32-s3-devkitm-1 保持一致)
+## 注意:已有的 sdkconfig 优先级更高,调整这里后需要同步改 sdkconfig 或删除它重新生成
+
+# 模型从 flash 的 model 分区读取
+CONFIG_MODEL_IN_FLASH=y
+
+# 唤醒词:你好小智(WakeNet10,ESP32-S3 用 wn10_data_p1,约 780KB)
+CONFIG_SR_WN_WN10_NIHAOXIAOZHI=y
+
+# 中文命令词模型:MultiNet7(mn7_cn,约 2.6MB)
+CONFIG_SR_MN_CN_MULTINET7_QUANT=y
+
+# 音频常开链路(AFE 47% + WakeNet10 23%)在 160MHz 下跑不动,必须 240MHz
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
