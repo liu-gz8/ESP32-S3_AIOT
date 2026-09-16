@@ -2,7 +2,7 @@
 #include "mic_inmp441.h"
 #include <math.h>
 
-void vad_init(vad_t *vad)
+void app_vad_init(app_vad_t *vad)
 {
     vad->noise_db = VAD_NOISE_FLOOR_INIT_DB;
     vad->state = VAD_STATE_SILENCE;
@@ -12,11 +12,11 @@ void vad_init(vad_t *vad)
     vad->speech_frames = 0;
 }
 
-vad_event_t vad_process(vad_t *vad, float rms_l, float rms_r)
+app_vad_event_t app_vad_process(app_vad_t *vad, float rms_l, float rms_r)
 {
     vad->voice_db = fmax((20 * log10(rms_l + 1)),
                         (20 * log10(rms_r + 1)));
-    vad_event_t vad_event = VAD_EVENT_NONE;
+    app_vad_event_t vad_event = VAD_EVENT_NONE;
     bool above_start = (vad->voice_db >= vad->noise_db + VAD_THRESHOLD);
     bool above_keep = (vad->voice_db >= vad->noise_db + VAD_THRESHOLD / 2);
 

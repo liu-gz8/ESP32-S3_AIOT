@@ -105,7 +105,7 @@ esp_err_t audio_segment_init(uint32_t sample_rate, uint32_t max_seconds, uint8_t
     return ESP_OK;
 }
 
-void audio_segment_feed(const int16_t *pcm,size_t frames, vad_event_t ev)
+void audio_segment_feed(const int16_t *pcm,size_t frames, app_vad_event_t ev)
 {
     /*立体声下沉混声写入环形缓冲pre-roll*/
     int32_t low_mix = 0;

@@ -54,7 +54,7 @@ esp_err_t audio_segment_init(uint32_t sample_rate, uint32_t max_seconds, uint8_t
  *frames:帧数块
  *ev：事件类型
 */
-void audio_segment_feed(const int16_t *pcm,size_t frames, vad_event_t ev);
+void audio_segment_feed(const int16_t *pcm,size_t frames, app_vad_event_t ev);
 
 /*消费者：读取一个完成的片段（阻塞等待timeout）
  *out:读取位置
