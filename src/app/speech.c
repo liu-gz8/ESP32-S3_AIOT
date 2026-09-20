@@ -6,9 +6,11 @@
 
 #include "freertos/queue.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_heap_caps.h"
 
 #include "speech.h"
+#include "audio_out.h"
 
 #define TAG "speech"
 #define SPEECH_PARTITION "model"    /*模型存放分区名*/
@@ -22,6 +24,7 @@ static srmodel_list_t *s_models = NULL;  /*模型分区模型列表*/
 static const esp_afe_sr_iface_t *s_afe = NULL; /*AFE框架接口*/
 static esp_afe_sr_data_t *s_afe_data = NULL;/*AFE框架实例*/
 
+static int64_t s_last_wake_us = 0;
 static int s_feed_chunk = 0;  /*每次feed的点数*/
 static int s_feed_channels = 0; /*feed的通道数(双通道立体声)*/
 static int s_fetch_chunk = 0; /*每次fetch输出的点数*/
@@ -97,6 +100,15 @@ static void speech_task(void *arg)
 
                 if(res->wakeup_state == WAKENET_DETECTED)
                 {
+                    int64_t now = esp_timer_get_time();
+                    if(now - s_last_wake_us > 2000000)
+                    {
+                        s_last_wake_us = now;
+                        speech_set_wakenet(false);
+                        audio_out_play_file("/spiffs/wake.pcm");
+                        speech_set_wakenet(true);
+                    }
+                    
                     ESP_LOGI(TAG, "唤醒命中:word = %d , model = %d, len = %d",
                             res->wake_word_index,
                             res->wakenet_model_index,
@@ -252,12 +264,11 @@ void speech_set_wakenet(bool on)
         return;
     }
 
-    //xQueueSend(s_pcm_q, s_accum, 0);
-
     if(on)
     {
         s_accum_frame = 0;
         s_afe->reset_buffer(s_afe_data);
+        xQueueReset(s_pcm_q);
         s_afe->enable_wakenet(s_afe_data);
         ESP_LOGI(TAG, "唤醒已开启");
 

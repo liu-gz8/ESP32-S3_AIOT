@@ -47,6 +47,6 @@ void app_main(void)
 
     xTaskCreatePinnedToCore(audio_app_task, "audio_app_task", 4096, NULL, 5, NULL, 0);
     xTaskCreate(seg_consumer_task, "seg_consumer", 4096, NULL, 4, NULL);
-    xTaskCreatePinnedToCore(perf_task, "perf", 4096, NULL, 1, NULL, 0);
+    //xTaskCreatePinnedToCore(perf_task, "perf", 4096, NULL, 1, NULL, 0);
 }
 
