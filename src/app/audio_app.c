@@ -56,15 +56,10 @@ void audio_app_task(void *arg)
         }
 
         /*阶段一:AFE 只负责唤醒;VAD 与片段链路继续使用原始 pcm*/
-        speech_event_t speech_ev = speech_feed(pcm, RX_FRAME_COUNT);
+        speech_push_pcm(pcm, RX_FRAME_COUNT);
 
         vad_event = app_vad_process(vad, st.rms_l, st.rms_r);
         audio_segment_feed(pcm, RX_FRAME_COUNT, vad_event);
-
-        if(speech_ev == SPEECH_EVT_WAKE)
-        {
-            printf("[WAKE] 唤醒命中\n");
-        }
 
         block_id++;
         /*每 10 块(160ms)打一次:逐块 printf 会占掉大量时间,拖慢采集节奏。
