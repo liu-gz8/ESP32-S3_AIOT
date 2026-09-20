@@ -3,6 +3,9 @@
 #include "esp_afe_config.h"
 #include "model_path.h"
 #include "esp_wn_models.h"
+#include "esp_mn_iface.h"
+#include "esp_mn_models.h"
+#include "esp_mn_speech_commands.h"
 
 #include "freertos/queue.h"
 #include "esp_log.h"
@@ -15,7 +18,7 @@
 #define TAG "speech"
 #define SPEECH_PARTITION "model"    /*模型存放分区名*/
 #define AFE_INPUT_FORMAT "MM"     /*两麦、无参考通道*/
-#define SPEECH_WAKENET_NAME "wn10_nihaoxiaozhi"
+#define SPEECH_WAKENET_NAME "wn9_nihaoxiaozhi_tts"
 #define SPEECH_PCM_BLOCK_FRAMES 256
 #define SPEECH_PCM_QUEUE_DEPTH 8
 
@@ -23,17 +26,22 @@ static QueueHandle_t s_pcm_q = NULL;
 static srmodel_list_t *s_models = NULL;  /*模型分区模型列表*/
 static const esp_afe_sr_iface_t *s_afe = NULL; /*AFE框架接口*/
 static esp_afe_sr_data_t *s_afe_data = NULL;/*AFE框架实例*/
+static esp_mn_iface_t *s_mn = NULL;/*MultiNet接口*/
+static model_iface_data_t *s_mn_data = NULL;/*MultiNet实例*/
 
-static int64_t s_last_wake_us = 0;
+static int64_t s_cmd_deadline_us = 0; /*">0"表示处于命令窗口*/
+static int64_t s_last_wake_us = 0; /*设备启动时间 */
 static int s_feed_chunk = 0;  /*每次feed的点数*/
 static int s_feed_channels = 0; /*feed的通道数(双通道立体声)*/
 static int s_fetch_chunk = 0; /*每次fetch输出的点数*/
 static int s_fetch_per_feed = 0;/*匹配值*/
+static int mn_chunk = 0;
 
 static int16_t *s_accum = NULL; /*攒帧缓冲区*/
 static size_t s_accum_frame = 0; /*已攒帧数*/
 static int16_t *s_out = NULL; /*最近一帧输出*/
-static size_t s_out_frames = 0;
+static size_t s_out_frames = 0;/*输出帧数*/
+
 
 static char *speech_pick_wakenet(srmodel_list_t* models)
 {
@@ -106,13 +114,41 @@ static void speech_task(void *arg)
                         s_last_wake_us = now;
                         speech_set_wakenet(false);
                         audio_out_play_file("/spiffs/wake.pcm");
-                        speech_set_wakenet(true);
+                        
+
+                        s_mn->clean(s_mn_data);
+                        s_cmd_deadline_us = esp_timer_get_time() + 5000 * 1000;
                     }
                     
                     ESP_LOGI(TAG, "唤醒命中:word = %d , model = %d, len = %d",
                             res->wake_word_index,
                             res->wakenet_model_index,
                             res->wake_word_length);
+                }
+
+                if(s_cmd_deadline_us > 0)
+                {
+                    if(esp_timer_get_time() > s_cmd_deadline_us)
+                    {
+                        ESP_LOGI(TAG, "命令窗口超时,未识别到命令");
+                        s_cmd_deadline_us = 0;
+                        speech_set_wakenet(true);
+                    }
+                    else if(res->data != NULL && res->data_size > 0)
+                    {
+                        /*MultiNet识别*/
+                        esp_mn_state_t st = s_mn->detect(s_mn_data, res->data);
+                        if(st == ESP_MN_STATE_DETECTED)
+                        {
+                            esp_mn_results_t *r = s_mn->get_results(s_mn_data);
+                            ESP_LOGI(TAG, "识别到命令: id = %d, 文本 = %s",
+                                    r->command_id[0],
+                                    r->string);
+                            s_mn->clean(s_mn_data);  /*清理状态 */
+                            s_cmd_deadline_us = 0;
+                            speech_set_wakenet(true);
+                        }
+                    }
                 }
 
 
@@ -172,6 +208,8 @@ esp_err_t speech_init(void)
     cfg->memory_alloc_mode = AFE_MEMORY_ALLOC_INTERNAL_PSRAM_BALANCE;
     cfg->afe_ringbuf_size = 8;
     cfg->wakenet_model_name = speech_pick_wakenet(s_models); /*按名字挑模型 */
+    cfg->wakenet_model_name_2 = NULL; 
+
 
     if(cfg->wakenet_model_name == NULL)
     {
@@ -205,12 +243,52 @@ esp_err_t speech_init(void)
     afe_config_free(cfg);
     cfg = NULL;
 
+    /*创建multinet*/
+    char *mn_name = esp_srmodel_filter(s_models, ESP_MN_PREFIX, ESP_MN_CHINESE);
+    if(mn_name == NULL)
+    {
+        ESP_LOGE(TAG, "模型包里面没有中文命令词！");
+        return ESP_FAIL;
+    }
+
+    s_mn = esp_mn_handle_from_name(mn_name);
+    if(s_mn == NULL)
+    {
+        ESP_LOGE(TAG, "multinet 句柄获取失败");
+        return ESP_FAIL;
+    }
+
+    s_mn_data = s_mn->create(mn_name, 5000);
+    if(s_mn_data == NULL)
+    {
+        ESP_LOGE(TAG, "multinet 实例创建失败(PSRAM)");
+        return ESP_FAIL;
+    }
+
+    mn_chunk = s_mn->get_samp_chunksize(s_mn_data);
+    ESP_LOGI(TAG, "MultiNet: %s, 每次 %d 点, 采样率 %d Hz",
+            mn_name,
+            mn_chunk,
+            s_mn->get_samp_rate(s_mn_data));
+
+    esp_mn_commands_alloc(s_mn, s_mn_data);
+    esp_mn_commands_add(1, "da kai dian deng");
+    esp_mn_commands_add(2, "da kai fang men");
+    esp_mn_error_t *err = esp_mn_commands_update(); 
+    if(err != NULL && err->num > 0)
+    {
+        for(int i = 0; i < err->num; i++)
+        {
+            ESP_LOGE(TAG, "命令词未加入(拼音有问题): %s", err->phrases[i]->string);
+        }
+    }
+    esp_mn_commands_print();
+
     /*查参数，分配缓冲*/
     s_feed_chunk = s_afe->get_feed_chunksize(s_afe_data);
     s_feed_channels = s_afe->get_feed_channel_num(s_afe_data);
     s_fetch_chunk = s_afe->get_fetch_chunksize(s_afe_data);
     s_fetch_per_feed = (s_feed_chunk + s_fetch_chunk - 1) / s_fetch_chunk; 
-
 
     s_accum = (int16_t *)calloc(1, sizeof(int16_t) * s_feed_chunk * s_feed_channels);
     s_out = (int16_t *)calloc(1, sizeof(int16_t) * s_fetch_chunk);
