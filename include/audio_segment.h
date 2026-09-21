@@ -10,8 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include <freertos/queue.h>
 
-#include "vad.h"
-
+#define AUDIO_SEG_MIN_MS 300
 
 typedef struct 
 {
@@ -36,8 +35,11 @@ typedef struct
     uint8_t  pool_idx;      /* 池内第几个片段 */
     size_t   sample_count; /*样本计数*/
     uint32_t seq;
-    int32_t  peak_l, peak_r;  /*左右峰值*/
+    int32_t  peak;  /*峰值*/
     bool     truncated;
+
+    uint8_t cmd_id;  /*命中的命令id；0表示没命中 */
+    bool has_cmd;
 }audio_segment_desc_t;
 
 
@@ -54,7 +56,7 @@ esp_err_t audio_segment_init(uint32_t sample_rate, uint32_t max_seconds, uint8_t
  *frames:帧数块
  *ev：事件类型
 */
-void audio_segment_feed(const int16_t *pcm,size_t frames, app_vad_event_t ev);
+void audio_segment_feed(const int16_t *pcm,size_t frames, bool is_speech, const int16_t *head, size_t head_frames);
 
 /*消费者：读取一个完成的片段（阻塞等待timeout）
  *out:读取位置
@@ -67,4 +69,7 @@ void audio_segment_release(audio_segment_desc_t *seg);
 
 /*统计：丢弃片段、当前池占用*/
 void audio_segment_stats(uint32_t *overrun_cnt, uint32_t *pool_used);
+
+/*给命令打标签*/
+void audio_segment_mark_cmd(uint8_t cmd_id);
 

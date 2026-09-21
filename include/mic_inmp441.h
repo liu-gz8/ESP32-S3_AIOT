@@ -6,9 +6,6 @@
 #include "driver/i2s_std.h"
 
 #define MIC_SAMPLE_RATE_HZ  16000  //i2s频率
-#define RX_FRAME_COUNT 256 //定义接收帧数
-#define RX_BYTES_PER_FRAME (2 * sizeof(int32_t))  // 每帧字节数
-#define RX_BUFFER_BYTES (RX_FRAME_COUNT * RX_BYTES_PER_FRAME)  //缓冲区大小
 
 /*==========引脚映射==========*/
 /*

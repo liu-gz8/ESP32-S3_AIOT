@@ -21,7 +21,16 @@
 #define TX_WRITE_TIMEOUT_MS        1000
 #define PLAY_LOCK_TIMEOUT_MS       1000
 #define PLAY_TAIL_SILENCE_MS       50      /* 等最后一段数据真正播完 */
+#define AUDIO_OUT_PATH_MAX 32
+#define AUDIO_OUT_QUEUE_DEPTH 4
 
+typedef struct 
+{ 
+    char path[AUDIO_OUT_PATH_MAX]; 
+} audio_out_req_t;
+
+static QueueHandle_t s_req_q = NULL;
+static TaskHandle_t  s_task  = NULL;
 static volatile bool      s_playing;                  /* 半双工协调标志 */
 static i2s_chan_handle_t  s_tx_chan;                  /* 缓存 TX 句柄 */
 static int32_t            s_tx_buf[TX_FRAME_COUNT * 2]; /* 32bit 立体声槽位缓冲(2KB, BSS) */
@@ -75,6 +84,17 @@ static esp_err_t audio_out_write_chunk(const int16_t *pcm, size_t samples)
 
 esp_err_t audio_out_init(void)
 {
+    s_req_q = xQueueCreate(
+        AUDIO_OUT_QUEUE_DEPTH,
+        sizeof(audio_out_req_t)
+    );
+    if(!s_req_q)
+        return ESP_ERR_NO_MEM;
+    
+    BaseType_t ok = xTaskCreate(audio_out_task, "audio_out", 4096, NULL, 3, &s_task);
+    if (ok != pdPASS)
+        return ESP_ERR_NO_MEM;
+
     gpio_config_t cfg =
     {
         .pin_bit_mask = 1ULL << AUDIO_AMP_EN_GPIO,
@@ -150,47 +170,18 @@ esp_err_t audio_out_play_file(const char *path)
 {
     if (!path) return ESP_ERR_INVALID_ARG;
 
-    FILE *fp = fopen(path, "rb");
-    if (!fp)
+    audio_out_req_t req;
+    strncpy(req.path, path, sizeof(req.path) - 1);
+    req.path[sizeof(req.path) - 1] = '\0';
+
+    s_playing = true;                       /* 半双工门立刻关上 */
+    if (xQueueSend(s_req_q, &req, 0) != pdTRUE)
     {
-        ESP_LOGE(TAG, "打开文件失败: %s", path);
-        return ESP_ERR_NOT_FOUND;
+        s_playing = false;                  /* 投递失败要还原 */
+        ESP_LOGW(TAG, "播放队列满,本次丢弃");
+        return ESP_ERR_NO_MEM;
     }
-
-    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(PLAY_LOCK_TIMEOUT_MS)) != pdTRUE)
-    {
-        ESP_LOGW(TAG, "有播放在进行,本次丢弃");
-        fclose(fp);
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    s_playing = true;
-    audio_out_set_enable(true);
-    vTaskDelay(pdMS_TO_TICKS(30));
-
-    int16_t chunk[TX_FRAME_COUNT];      /* 512 字节,栈上安全 */
-    size_t  n = 0;
-    esp_err_t ret = ESP_OK;
-
-    while ((n = fread(chunk, sizeof(int16_t), TX_FRAME_COUNT, fp)) > 0)
-    {
-        ret = audio_out_write_chunk(chunk, n);
-        if (ret != ESP_OK)
-        {
-            ESP_LOGE(TAG, "播放中断: %s", esp_err_to_name(ret));
-            break;
-        }
-    }
-    if (ferror(fp)) ret = ESP_FAIL;
-
-    fclose(fp);
-
-    vTaskDelay(pdMS_TO_TICKS(PLAY_TAIL_SILENCE_MS));
-    audio_out_set_enable(false);
-    s_playing = false;
-
-    xSemaphoreGive(s_lock);
-    return ret;
+    return ESP_OK;
 }
 
 esp_err_t audio_out_tone(uint32_t freq_hz, uint32_t duration_ms)
@@ -220,4 +211,45 @@ esp_err_t audio_out_tone(uint32_t freq_hz, uint32_t duration_ms)
     esp_err_t ret = audio_out_play(buf, total);
     heap_caps_free(buf);
     return ret;
+}
+
+void audio_out_task(void *arg)
+{
+    audio_out_req_t req;
+    int16_t chunk[TX_FRAME_COUNT];
+
+    for (;;)
+    {
+        if (xQueueReceive(s_req_q, &req, portMAX_DELAY) != pdTRUE) continue;
+
+        FILE *fp = fopen(req.path, "rb");
+        if (!fp)
+        {
+            ESP_LOGE(TAG, "打开文件失败: %s", req.path);
+            if (uxQueueMessagesWaiting(s_req_q) == 0) s_playing = false;
+            continue;
+        }
+
+        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(PLAY_LOCK_TIMEOUT_MS)) != pdTRUE)
+        {
+            fclose(fp);
+            if (uxQueueMessagesWaiting(s_req_q) == 0) s_playing = false;
+            continue;
+        }
+
+        audio_out_set_enable(true);
+        vTaskDelay(pdMS_TO_TICKS(30));
+
+        size_t n;
+        while ((n = fread(chunk, sizeof(int16_t), TX_FRAME_COUNT, fp)) > 0)
+            audio_out_write_chunk(chunk, n);
+
+        fclose(fp);
+        vTaskDelay(pdMS_TO_TICKS(PLAY_TAIL_SILENCE_MS));
+        audio_out_set_enable(false);
+        xSemaphoreGive(s_lock);
+
+        /* 队列里还有排队的就继续保持 playing */
+        if (uxQueueMessagesWaiting(s_req_q) == 0) s_playing = false;
+    }
 }

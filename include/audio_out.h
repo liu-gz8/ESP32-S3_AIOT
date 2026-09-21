@@ -28,3 +28,6 @@ void audio_out_set_enable(bool on);
 
 /*半双工调用*/
 bool audio_out_is_playing(void);
+
+/*播放任务创建*/
+void audio_out_task(void *arg);

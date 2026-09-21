@@ -5,7 +5,6 @@
 #include "mic_inmp441.h"
 #include "audio_segment.h"
 #include "audio_app.h"
-#include "vad.h"
 #include "audio_out.h"
 #include "storage.h"
 #include "speech.h"
@@ -40,13 +39,15 @@ void app_main(void)
 
     /*开机提示音:此时 AFE 还没起来,不用担心它听到提示音*/
     audio_out_play_file("/spiffs/wake.pcm");
+    while (audio_out_is_playing()) vTaskDelay(pdMS_TO_TICKS(20));
 
     /*AFE + WakeNet(约占用 1~2MB PSRAM,失败会打印错误并返回)*/
     ESP_ERROR_CHECK(speech_init());
-    ESP_ERROR_CHECK(speech_start());
 
     xTaskCreatePinnedToCore(audio_app_task, "audio_app_task", 4096, NULL, 5, NULL, 0);
     xTaskCreate(seg_consumer_task, "seg_consumer", 4096, NULL, 4, NULL);
+    xTaskCreatePinnedToCore(speech_fetch_task, "speech_fetch", 8192, NULL, 4, NULL, 1);
+    xTaskCreate(audio_out_task, "audio_out", 4096, NULL, 3, NULL);
     //xTaskCreatePinnedToCore(perf_task, "perf", 4096, NULL, 1, NULL, 0);
 }
 

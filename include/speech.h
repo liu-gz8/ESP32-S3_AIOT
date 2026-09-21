@@ -5,6 +5,13 @@
 #include <stddef.h>
 #include <esp_err.h>
 
+
+#define TAG "speech"
+#define SPEECH_PARTITION "model"    /*模型存放分区名*/
+#define AFE_INPUT_FORMAT "MM"     /*两麦、无参考通道*/
+#define SPEECH_WAKENET_NAME "wn9_nihaoxiaozhi_tts"
+#define SPEECH_PCM_BLOCK_FRAMES 1024  /*每个识别区的帧数*/
+
 /*
  * ESP-SR 语音前端对外接口(AFE + WakeNet)
  *
@@ -21,11 +28,6 @@
  *   - 命令词识别(MultiNet)不在本模块,由上层用 speech_take_frame() 的输出喂
  */
 
-typedef enum
-{
-    SPEECH_EVT_NONE = 0,   /* 本帧没有事件 */
-    SPEECH_EVT_WAKE        /* 本帧命中唤醒词 */
-} speech_event_t;
 
 typedef enum
     {
@@ -40,16 +42,14 @@ typedef enum
  */
 esp_err_t speech_init(void);
 
+void speech_fetch_task(void *arg);
+
 /*
  * 半双工开关:播放提示音前关唤醒,播完再开。
  * 必须成对调用;关闭期间可以继续 feed,也可以暂停。
  */
 void speech_set_wakenet(bool on);
 
-/*创建PCM队列和speech任务，在app_main里调用*/
-esp_err_t speech_start(void);
 
-/*采集任务将投递一块数据（256帧立体声），队列满返回ESP_ERR_NO_MEM,不阻塞*/
-esp_err_t speech_push_pcm(const int16_t *pcm_stereo, size_t frames);
-
-const int16_t *speech_last_frame(size_t *frames);
+/*从队列取出PCM，喂给AFE框架*/
+esp_err_t speech_feed_pcm(const int16_t *pcm, size_t frames);

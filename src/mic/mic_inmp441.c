@@ -21,6 +21,8 @@ esp_err_t mic_init(void)
 {
     //I2S全双通道配置
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
+    chan_cfg.dma_desc_num = 6;
+    chan_cfg.dma_frame_num = 480;
     chan_cfg.auto_clear = true;  /*TX空闲时自动发送0，避免噪声*/
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &i2s_tx_chan,&i2s_rx_chan)); // 创建I2S全 双工 通道
 
@@ -52,8 +54,9 @@ esp_err_t mic_init(void)
 
 }
 
-//I2S读取任务函数
+
 /*=================================================
+//I2S读取任务函数
  *r_buf :数据接收缓冲区
  *r_bytes :读取的字节数
  ====================================================*/

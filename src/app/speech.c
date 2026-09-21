@@ -14,15 +14,9 @@
 
 #include "speech.h"
 #include "audio_out.h"
+#include "mic_inmp441.h"
+#include "audio_segment.h"
 
-#define TAG "speech"
-#define SPEECH_PARTITION "model"    /*模型存放分区名*/
-#define AFE_INPUT_FORMAT "MM"     /*两麦、无参考通道*/
-#define SPEECH_WAKENET_NAME "wn9_nihaoxiaozhi_tts"
-#define SPEECH_PCM_BLOCK_FRAMES 256
-#define SPEECH_PCM_QUEUE_DEPTH 8
-
-static QueueHandle_t s_pcm_q = NULL;
 static srmodel_list_t *s_models = NULL;  /*模型分区模型列表*/
 static const esp_afe_sr_iface_t *s_afe = NULL; /*AFE框架接口*/
 static esp_afe_sr_data_t *s_afe_data = NULL;/*AFE框架实例*/
@@ -37,12 +31,6 @@ static int s_fetch_chunk = 0; /*每次fetch输出的点数*/
 static int s_fetch_per_feed = 0;/*匹配值*/
 static int mn_chunk = 0;
 
-static int16_t *s_accum = NULL; /*攒帧缓冲区*/
-static size_t s_accum_frame = 0; /*已攒帧数*/
-static int16_t *s_out = NULL; /*最近一帧输出*/
-static size_t s_out_frames = 0;/*输出帧数*/
-
-
 static char *speech_pick_wakenet(srmodel_list_t* models)
 {
     for(int i = 0; i < models->num; i++)
@@ -52,114 +40,80 @@ static char *speech_pick_wakenet(srmodel_list_t* models)
     return esp_srmodel_filter(models, ESP_WN_PREFIX, NULL);
 }
 
-static void speech_task(void *arg)
+/*将PCM缓冲区内容喂给AFE框架*/
+esp_err_t speech_feed_pcm(const int16_t *pcm, size_t frames)
 {
-    int16_t buf[SPEECH_PCM_BLOCK_FRAMES * 2];
-    uint32_t cnt = 0;
+    if (s_afe == NULL || s_afe_data == NULL) return ESP_ERR_INVALID_STATE;
+    /*将PCM喂给AFE框架*/
+    s_afe->feed(s_afe_data, pcm);
+    return ESP_OK;
+}
+
+void speech_fetch_task(void *arg)
+{
     while(1)
     {   
-        if(xQueueReceive(s_pcm_q, buf, portMAX_DELAY) != pdTRUE)
+        /*从AFE中获取结果*/
+        afe_fetch_result_t *res = s_afe->fetch(s_afe_data);
+        if(res == NULL)
             continue;
 
-        size_t copied = 0;
-        while(copied < SPEECH_PCM_BLOCK_FRAMES)
+        if(res->wakeup_state == WAKENET_DETECTED)
         {
-            size_t need = (size_t)s_feed_chunk - s_accum_frame;
-            size_t take = (SPEECH_PCM_BLOCK_FRAMES - copied) < need 
-            ?(SPEECH_PCM_BLOCK_FRAMES - copied) 
-            :need;
-
-            memcpy(&s_accum[s_accum_frame * s_feed_channels],
-                &buf[copied * 2],
-                take * 2 * sizeof(int16_t));
-
-            s_accum_frame += take;
-            copied += take;
-
-            if(s_accum_frame < (size_t)s_feed_chunk)
-                continue;
-            
-            s_accum_frame = 0;
-            s_afe->feed(s_afe_data, s_accum);
-
-
-            
-            for(size_t i = 0; i < (size_t)s_fetch_per_feed; i++)
+            int64_t now = esp_timer_get_time();
+            if(now - s_last_wake_us > 2000000)
             {
-                afe_fetch_result_t *res = s_afe->fetch(s_afe_data);
+                s_last_wake_us = now;
+                speech_set_wakenet(false);
+                audio_out_play_file("/spiffs/wake.pcm");
 
-                if(res == NULL)
+                s_mn->clean(s_mn_data);
+                s_cmd_deadline_us = esp_timer_get_time() + 5000 * 1000;
+            }
+            
+            ESP_LOGI(TAG, "唤醒命中:word = %d , model = %d, len = %d",
+                    res->wake_word_index,
+                    res->wakenet_model_index,
+                    res->wake_word_length);
+        }
+            /*创建命令窗口(5s)*/
+        if(s_cmd_deadline_us > 0)
+        {
+            if(esp_timer_get_time() > s_cmd_deadline_us)
+            {
+                ESP_LOGI(TAG, "命令窗口超时,未识别到命令");
+                s_cmd_deadline_us = 0;
+                speech_set_wakenet(true);
+            }
+            else if(res->data != NULL && res->data_size > 0)
+            {
+                /*MultiNet识别*/
+                esp_mn_state_t st = s_mn->detect(s_mn_data, res->data);
+                if(st == ESP_MN_STATE_DETECTED)
                 {
-                    ESP_LOGW(TAG, "fetch返回kong");
-                    continue;
-                }
-
-                if(res->data != NULL && res->data_size > 0)
-                {
-                    size_t n = (size_t)res->data_size / sizeof(int16_t);
-                    if(n > (size_t)s_fetch_chunk)
-                    {
-                        n = (size_t)s_fetch_chunk;
-                    }
+                    esp_mn_results_t *r = s_mn->get_results(s_mn_data);
                     
-                    memcpy(s_out, res->data, n * sizeof(int16_t));
-                    s_out_frames = n;
+                    ESP_LOGI(TAG, "识别到命令: id = %d, 文本 = %s",
+                            r->command_id[0],
+                            r->string);
+                    s_mn->clean(s_mn_data);  /*清理状态 */
+                    s_cmd_deadline_us = 0;
+                    audio_segment_mark_cmd(r->command_id[0]);
+                    speech_set_wakenet(true);
                 }
-
-                if(res->wakeup_state == WAKENET_DETECTED)
-                {
-                    int64_t now = esp_timer_get_time();
-                    if(now - s_last_wake_us > 2000000)
-                    {
-                        s_last_wake_us = now;
-                        speech_set_wakenet(false);
-                        audio_out_play_file("/spiffs/wake.pcm");
-                        
-
-                        s_mn->clean(s_mn_data);
-                        s_cmd_deadline_us = esp_timer_get_time() + 5000 * 1000;
-                    }
-                    
-                    ESP_LOGI(TAG, "唤醒命中:word = %d , model = %d, len = %d",
-                            res->wake_word_index,
-                            res->wakenet_model_index,
-                            res->wake_word_length);
-                }
-
-                if(s_cmd_deadline_us > 0)
-                {
-                    if(esp_timer_get_time() > s_cmd_deadline_us)
-                    {
-                        ESP_LOGI(TAG, "命令窗口超时,未识别到命令");
-                        s_cmd_deadline_us = 0;
-                        speech_set_wakenet(true);
-                    }
-                    else if(res->data != NULL && res->data_size > 0)
-                    {
-                        /*MultiNet识别*/
-                        esp_mn_state_t st = s_mn->detect(s_mn_data, res->data);
-                        if(st == ESP_MN_STATE_DETECTED)
-                        {
-                            esp_mn_results_t *r = s_mn->get_results(s_mn_data);
-                            ESP_LOGI(TAG, "识别到命令: id = %d, 文本 = %s",
-                                    r->command_id[0],
-                                    r->string);
-                            s_mn->clean(s_mn_data);  /*清理状态 */
-                            s_cmd_deadline_us = 0;
-                            speech_set_wakenet(true);
-                        }
-                    }
-                }
-
-
             }
 
         }
-
         
-        
-        if((++cnt % 50) == 0)
-            ESP_LOGI(TAG, "收到 %u 块", (unsigned)cnt);
+        if(res->data && res->data_size > 0)
+        {
+            bool is_speech = (res->vad_state != VAD_SILENCE);
+            audio_segment_feed(res->data,
+                            res->data_size / sizeof(int16_t),
+                            is_speech,
+                            (const int16_t *)res->vad_cache,     
+                            res->vad_cache_size / sizeof(int16_t)); 
+        }
     }
 }
 
@@ -290,20 +244,6 @@ esp_err_t speech_init(void)
     s_fetch_chunk = s_afe->get_fetch_chunksize(s_afe_data);
     s_fetch_per_feed = (s_feed_chunk + s_fetch_chunk - 1) / s_fetch_chunk; 
 
-    s_accum = (int16_t *)calloc(1, sizeof(int16_t) * s_feed_chunk * s_feed_channels);
-    s_out = (int16_t *)calloc(1, sizeof(int16_t) * s_fetch_chunk);
-
-    if(s_accum == NULL || s_out == NULL)
-    {
-        ESP_LOGE(TAG, "音频缓冲分配失败");
-        s_afe->destroy(s_afe_data);
-        s_afe_data = NULL;
-        afe_config_free(cfg);
-        esp_srmodel_deinit(s_models);
-        s_models = NULL;
-        return ESP_FAIL;
-    }
-
     /*打印实际生效的流水线*/
     s_afe->print_pipeline(s_afe_data);
 
@@ -321,19 +261,6 @@ esp_err_t speech_init(void)
     return ESP_OK;
 }
 
-const int16_t *speech_last_frame(size_t *frames)
-{
-    if(frames != NULL)
-    {
-        *frames = s_out_frames;
-    }
-    if(s_out == NULL || s_out_frames == 0)
-    {
-        return NULL;
-    }
-    return s_out;
-}
-
 void speech_set_wakenet(bool on)
 {
 
@@ -344,9 +271,6 @@ void speech_set_wakenet(bool on)
 
     if(on)
     {
-        s_accum_frame = 0;
-        s_afe->reset_buffer(s_afe_data);
-        xQueueReset(s_pcm_q);
         s_afe->enable_wakenet(s_afe_data);
         ESP_LOGI(TAG, "唤醒已开启");
 
@@ -354,27 +278,8 @@ void speech_set_wakenet(bool on)
     else
     {
         s_afe->disable_wakenet(s_afe_data);
+        s_afe->reset_buffer(s_afe_data);
         ESP_LOGI(TAG, "唤醒已关闭（半双工）");
     }
 }
 
-/*创建PCM 队列，捆绑speech任务到内核1，优先级4*/
-esp_err_t speech_start(void)
-{
-    s_pcm_q = xQueueCreate(SPEECH_PCM_QUEUE_DEPTH,
-                            SPEECH_PCM_BLOCK_FRAMES * 2 * sizeof(int16_t));
-    if(!s_pcm_q)
-    {
-        return ESP_ERR_NO_MEM;
-    }
-    xTaskCreatePinnedToCore(speech_task, "speech", 8192, NULL, 4, NULL, 1);
-    return ESP_OK;
-}
-
-/*从PCM队列取出frames帧，存放到pcm_stereo*/
-esp_err_t speech_push_pcm(const int16_t *pcm_stereo, size_t frames)
-{
-    if(!s_pcm_q || frames != SPEECH_PCM_BLOCK_FRAMES)
-        return ESP_ERR_INVALID_ARG;
-    return (xQueueSend(s_pcm_q, pcm_stereo, 0) == pdTRUE) ? ESP_OK : ESP_ERR_NO_MEM;
-}
